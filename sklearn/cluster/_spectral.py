@@ -146,7 +146,6 @@ def discretize(vectors, *, copy=True, max_svd_restarts=30, n_iter_max=20,
                 vectors_ovl = vectors_discrete_second.multiply(overlap.reshape(-1,1))
                 vectors_discrete += vectors_ovl
                 assert (np.sum(vectors_discrete) == np.sum(overlap) + n_samples)
-                vectors_discrete = normalize(vectors_discrete, norm='l2', axis=1)
 
             t_svd = vectors_discrete.T * vectors
 
