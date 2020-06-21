@@ -16,11 +16,12 @@ from ..metrics.pairwise import pairwise_kernels
 from ..neighbors import kneighbors_graph, NearestNeighbors
 from ..manifold import spectral_embedding
 from ._kmeans import k_means
+from ..preprocessing import normalize
 
 
 @_deprecate_positional_args
 def discretize(vectors, *, copy=True, max_svd_restarts=30, n_iter_max=20,
-               random_state=None):
+               random_state=None, overlap=None):
     """Search for a partition matrix (clustering) which is closest to the
     eigenvector embedding.
 
@@ -44,9 +45,12 @@ def discretize(vectors, *, copy=True, max_svd_restarts=30, n_iter_max=20,
         Use an int to make the randomness deterministic.
         See :term:`Glossary <random_state>`.
 
+    overlap : array-like of shape (n_samples)
+        0/1 vector denoting which sample belongs to more than 1 cluster.
+
     Returns
     -------
-    labels : array of integers, shape: n_samples
+    labels : array of integers/tuples, shape: n_samples
         The labels of the clusters.
 
     References
@@ -133,6 +137,16 @@ def discretize(vectors, *, copy=True, max_svd_restarts=30, n_iter_max=20,
             vectors_discrete = csc_matrix(
                 (np.ones(len(labels)), (np.arange(0, n_samples), labels)),
                 shape=(n_samples, n_components))
+            
+            if (overlap is not None):
+                labels_second = t_discrete.argsort(axis=1)[:,-2]
+                vectors_discrete_second = csc_matrix(
+                    (np.ones(len(labels_second)), (np.arange(0, n_samples), labels_second)),
+                    shape=(n_samples, n_components))
+                vectors_ovl = vectors_discrete_second.multiply(overlap.reshape(-1,1))
+                vectors_discrete += vectors_ovl
+                assert (np.sum(vectors_discrete) == np.sum(overlap) + n_samples)
+                vectors_discrete = normalize(vectors_discrete, norm='l2', axis=1)
 
             t_svd = vectors_discrete.T * vectors
 
@@ -147,6 +161,12 @@ def discretize(vectors, *, copy=True, max_svd_restarts=30, n_iter_max=20,
             if ((abs(ncut_value - last_objective_value) < eps) or
                     (n_iter > n_iter_max)):
                 has_converged = True
+                new_labels = []
+                for i in range(len(overlap)):
+                    if (overlap[i] == 1):
+                        new_labels.append((labels[i], labels_second[i]))
+                    else:
+                        new_labels.append(labels[i])
             else:
                 # otherwise calculate rotation and continue
                 last_objective_value = ncut_value
@@ -154,13 +174,13 @@ def discretize(vectors, *, copy=True, max_svd_restarts=30, n_iter_max=20,
 
     if not has_converged:
         raise LinAlgError('SVD did not converge')
-    return labels
+    return new_labels
 
 
 @_deprecate_positional_args
 def spectral_clustering(affinity, *, n_clusters=8, n_components=None,
                         eigen_solver=None, random_state=None, n_init=10,
-                        eigen_tol=0.0, assign_labels='kmeans'):
+                        eigen_tol=0.0, assign_labels='kmeans', overlap_vector=None):
     """Apply clustering to a projection of the normalized Laplacian.
 
     In practice Spectral Clustering is very useful when the structure of
@@ -250,7 +270,7 @@ def spectral_clustering(affinity, *, n_clusters=8, n_components=None,
     This algorithm solves the normalized cut for k=2: it is a
     normalized spectral clustering.
     """
-    if assign_labels not in ('kmeans', 'discretize'):
+    if assign_labels not in ('kmeans', 'discretize', 'discretize_ol'):
         raise ValueError("The 'assign_labels' parameter should be "
                          "'kmeans' or 'discretize', but '%s' was given"
                          % assign_labels)
@@ -269,8 +289,10 @@ def spectral_clustering(affinity, *, n_clusters=8, n_components=None,
     if assign_labels == 'kmeans':
         _, labels, _ = k_means(maps, n_clusters, random_state=random_state,
                                n_init=n_init)
+    elif assign_labels == 'discretize':
+        labels = discretize(maps, random_state=random_state, overlap=None)
     else:
-        labels = discretize(maps, random_state=random_state)
+        labels = discretize(maps, random_state=random_state, overlap=overlap_vector)
 
     return labels
 
@@ -362,6 +384,9 @@ class SpectralClustering(ClusterMixin, BaseEstimator):
         also be sensitive to initialization. Discretization is another approach
         which is less sensitive to random initialization.
 
+    overlap_vector : np.int
+        0/1 vector denoting which segments are overlapping. 
+
     degree : float, default=3
         Degree of the polynomial kernel. Ignored by other kernels.
 
@@ -442,7 +467,7 @@ class SpectralClustering(ClusterMixin, BaseEstimator):
     @_deprecate_positional_args
     def __init__(self, n_clusters=8, *, eigen_solver=None, n_components=None,
                  random_state=None, n_init=10, gamma=1., affinity='rbf',
-                 n_neighbors=10, eigen_tol=0.0, assign_labels='kmeans',
+                 n_neighbors=10, eigen_tol=0.0, assign_labels='kmeans', overlap_vector = None,
                  degree=3, coef0=1, kernel_params=None, n_jobs=None):
         self.n_clusters = n_clusters
         self.eigen_solver = eigen_solver
@@ -454,6 +479,7 @@ class SpectralClustering(ClusterMixin, BaseEstimator):
         self.n_neighbors = n_neighbors
         self.eigen_tol = eigen_tol
         self.assign_labels = assign_labels
+        self.overlap_vector = overlap_vector
         self.degree = degree
         self.coef0 = coef0
         self.kernel_params = kernel_params
@@ -523,7 +549,8 @@ class SpectralClustering(ClusterMixin, BaseEstimator):
                                            random_state=random_state,
                                            n_init=self.n_init,
                                            eigen_tol=self.eigen_tol,
-                                           assign_labels=self.assign_labels)
+                                           assign_labels=self.assign_labels,
+                                           overlap_vector=self.overlap_vector)
         return self
 
     def fit_predict(self, X, y=None):
