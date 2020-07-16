@@ -138,7 +138,7 @@ def discretize(vectors, *, copy=True, max_svd_restarts=30, n_iter_max=20,
                 (np.ones(len(labels)), (np.arange(0, n_samples), labels)),
                 shape=(n_samples, n_components))
             
-            if (overlap is not None):
+            if (overlap is not None) and (t_discrete.argsort(axis=1).shape[1] >= 2):
                 labels_second = t_discrete.argsort(axis=1)[:,-2]
                 vectors_discrete_second = csc_matrix(
                     (np.ones(len(labels_second)), (np.arange(0, n_samples), labels_second)),
